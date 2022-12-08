@@ -8,6 +8,7 @@ from proteus.environment.agent import Diver
 from darknet_ros_msgs.msg import BoundingBox
 from body_pose_msgs.msg import HumanPoseEstimate
 
+# This function returns the IOU of two bounding box messages.
 def calculate_iou(boxA: BoundingBox, boxB: BoundingBox) -> float:
     xA = max(boxA.xmax, boxB.xmax)
     yA = max(boxA.ymax, boxB.ymax)
@@ -23,12 +24,29 @@ def calculate_iou(boxA: BoundingBox, boxB: BoundingBox) -> float:
 
     return iou
 
+# Calculate the distance between the center of two pose messages.
 def calculate_center_dist(poseA: HumanPoseEstimate, poseB: HumanPoseEstimate) -> float:
     poseA_center = calculate_pose_center(poseA)
     poseB_center = calculate_pose_center(poseB)
 
-    return sqrt((poseA_center[0] - poseB_center[0])**2 + (poseA_center[1] - poseB_center[1])**2)
+    return dist(poseA_center, poseB_center)
 
+def dist(a, b):
+    return sqrt((a[0] - b[0])**2 + (a[1] - b[1])**2)
+
+# Checks if a point is within the bounds of a bounding box.
+def point_within_box(point: List[float, float], box: BoundingBox) -> bool:
+    x,y=point
+    return ((x > box.xmin) and (x < box.xmax)) and ((y > box.ymin) and (y < box.ymax))
+
+# Calculate the center of a bounding box (in pixel-relative coordinates)
+def calculate_box_center(box: BoundingBox, dims: List[float, float]) -> List[float, float]:
+    midx = float(box.xmax - box.xmin)/dims[0]
+    midy = float(box.ymax - box.ymin)/dims[1]
+
+    return [midx, midy]
+
+# Calculate the center of a pose message.
 def calculate_pose_center(pose:HumanPoseEstimate) -> List[float, float]:
     xs = []
     ys = []
@@ -42,23 +60,28 @@ def calculate_pose_center(pose:HumanPoseEstimate) -> List[float, float]:
 
     return [x_mean, y_mean]
 
-
-
+# The diver track object adds tracking information on top of a PROTEUS diver object.
 class DiverTrack(object):
     _iou_threshold = 0.25
-    _dist_thereshold = 10
+    _dist_thereshold = 0.1
+    _parts_threshold = 10
     _time_thresh = 1
 
-    def __init__(self, name: str, bbox: BoundingBox = None, pose: HumanPoseEstimate = None, queue_size: int = 10) -> None:
-        self.diver = Diver(name)
+    def __init__(self, name: str, bbox: BoundingBox = None, pose: HumanPoseEstimate = None, queue_size: int = 10, dims: List[float, float] = [None, None]) -> None:
+        self.diver = Diver(name) # ID
+
+        # Queues of recent BBox and Pose messages.
         self.recent_bboxes = deque(queue_size)
         self.last_bbox_time = None
         self.recent_poses = deque(queue_size)
         self.last_pose_time = None
 
+        # Time last seen and whether or not the diver is currently seen.
         self.last_seen = None
         self.currently_seen = True
 
+        # Dimmensions of source image and DRP information.
+        self.img_dims = dims 
         self.center_point = None
         self.pseudodistance = None
 
@@ -70,7 +93,19 @@ class DiverTrack(object):
             self.recent_poses.append(bbox)
             self.last_pose_time = Time.now()
 
+    # Accessor for latest bbox.
+    def get_latest_bbox(self) -> BoundingBox:
+        return self.recent_bboxes[0]
 
+    # Accessor for latest pose
+    def get_latest_pose(self) -> HumanPoseEstimate:
+        return self.recent_bboxes[0]
+
+    # Accessor for drp data.
+    def get_relative_position(self) -> List[ List[float, float], float]:
+        return [self.center_point, self.pseudodistance]
+
+    # Calculate the confidence in the track based on the matches between the track elements.
     def calculate_track_confidence(self) -> List[float, float, float]:
         ious = []
         for k, bbox in enumerate(self.recent_bboxes):
@@ -92,20 +127,43 @@ class DiverTrack(object):
 
         return [(avg_iou * (1 - avg_dist)), avg_iou, avg_dist]
 
-
+    # Calculate DRP data
     def update_relative_position(self) -> None:
         if self.currently_seen:
             self.center_point = self.calculate_center_point()
             self.pseudodistance = self.calculate_pseudodistance()
 
+    # Calculate the center point information
     def calculate_center_point(self) -> List[float, float]:
         pass
 
+    # Calculat ethe pseudodistances information
     def calculate_pseudodistance(self) -> float:
         pass
 
-
+    # Attempt to associate a bounding box with this track.
     def associate_bbox(self, candidates: List[BoundingBox], method: str = "max_iou") -> List[bool, List[BoundingBox]]:
+        # If there are no previous bounding boxes, we need to consider the most recent pose.
+        if len(self.recent_bboxes) < 0:
+            last_pose = self.recent_poses[0]
+            parts_within = []
+
+            # Calculate the number of body parts that fall within the candidate box.
+            for k, box in enumerate(candidates):
+                parts_within[k] = 0
+                for bp in last_pose.body_parts:
+                    if point_within_box([bp.abs_x, bp.abs_y], box):
+                        parts_within[k] += 1
+            
+            highest_count = max(parts_within)
+            if highest_count > DiverTrack._parts_threshold:
+                selected_bbox = candidates.pop(parts_within.index(highest_count))
+                self.recent_bboxes.append(selected_bbox)
+                self.last_bbox_time = Time.now()
+                return [True, candidates]
+            else:
+                return [False, candidates]
+            
         if method.lower() == "max_iou":
             ious = []
             for k, past in enumerate(self.recent_bboxes):
@@ -125,19 +183,38 @@ class DiverTrack(object):
             if selected_idx:
                 selected_bbox = candidates.pop(selected_idx)
                 self.recent_bboxes.append(selected_bbox)
-                self.last_pose_time = Time.now()
+                self.last_bbox_time = Time.now()
                 ret = True
 
             else: # If the most common element in the list is None, we didn't find a good match.
                 ret = False
 
-            
             return [ret, candidates]
 
         else:
             raise NotImplementedError(f"Association method {method} not implemented in function associated_bbox.")
 
+    # Attempt to associate a pose measurement with a track.
     def associate_pose(self, candidates: List[HumanPoseEstimate], method: str = "avg_center") -> List[bool, List[HumanPoseEstimate]]:
+        # If there are no previous poses, we need to consider the most recent bounding box.
+        if len(self.recent_poses) < 0:
+            last_bbox = self.recent_bboxes[0]
+            cp = calculate_box_center(last_bbox, self.img_dims)
+
+            dists = []
+            for k, candidate in enumerate(candidates):
+                pose_cp = calculate_pose_center(candidate)
+                dists[k] = dist(cp, pose_cp)
+
+            min_dist = min(dists)
+            if min_dist < DiverTrack._dist_thereshold:
+                selected_pose = candidates.pop(dists.index(min_dist))
+                self.recent_poses.append(selected_pose)
+                self.last_pose_time = Time.now()
+                return [True, candidates]
+            else:
+                return [False, candidates]
+
         if method == "avg_center":
             dists = []
             for k, past in enumerate(self.recent_poses):
@@ -148,7 +225,7 @@ class DiverTrack(object):
             mins = []
             for dist_list in dists:
                 min_dist = min(dist_list)
-                if min_dist < DiverTrack._center_threshold:
+                if min_dist < DiverTrack._dist_threshold:
                     mins.append(dist_list.index(min_dist))
                 else:
                     mins.append(None)
@@ -167,9 +244,7 @@ class DiverTrack(object):
         else:
             raise NotImplementedError(f"Association method {method} not implemented in function associated_bbox.")
 
+    # Update recency information
     def update_seen(self) -> None:
         self.last_seen =  min(self.last_bbox_time, self.last_pose_time)
         self.currently_seen = ((Time.now() - self.last_seen) < DiverTrack._time_thresh)
-
-        
-    
