@@ -1,6 +1,6 @@
 <launch>
     <group ns="/loco/proteus/">
-        <node pkg="proteus_diver_context" name="proteus_dcm" type="diver_context_module.py" respawn="true" output="screen"></node>
-        <node pkg="proteus_diver_context" name="proteus_dvm" type="diver_visualizer_module.py" respawn="true" output="screen"></node>
+        <node pkg="proteus_diver_context" name="proteus_dcm" type="diver_context_node.py" respawn="true" output="screen"></node>
+        <node pkg="proteus_diver_context" name="proteus_dvm" type="diver_visualizer_node.py" respawn="true" output="screen"></node>
     </group>
 </launch>

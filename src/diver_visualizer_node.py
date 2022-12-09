@@ -24,39 +24,41 @@ def draw_diver(img, diver) -> None:
     return img
 
 def draw_name(img, name, corner, color) -> None:
-    img = cv2.putText(img, name, [corner[0], corner[1]-10], cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,0,0), 2)
-    word_length = len(name) * 5
-    img = cv2.rectangle(img, [corner[0], corner[1]-35], [corner[0] + word_length, corner[1]], color, -1)
+    word_length = len(name) * 25
+    img = cv2.rectangle(img, (corner[0]-5, corner[1]-40), (corner[0] + word_length, corner[1]), color, -1)
+    img = cv2.putText(img, name, (corner[0]+5, corner[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,0,0), 2)
+    
     return img
 
 def draw_bbox(img, box, color) -> None:
-    if box:
-        img = cv2.rectangle(img, [box.xmin, box.ymin], [box.xmax, box.ymax], color)
+    if box is not None:
+        img = cv2.rectangle(img, (box.xmin, box.ymin), (box.xmax, box.ymax), color, 5)
     return img
 
 def draw_pose(img, pose, color) -> None:
-    if pose:
-        for bp in pose.body_part:
-            img = cv2.circle(img, [bp.abs_x, bp.abs_y], radius=2, color=color, thickness=-1)
+    if pose is not None:
+        for bp in pose.body_parts:
+            img = cv2.circle(img, (bp.abs_x, bp.abs_y), radius=2, color=color, thickness=-1)
     return img
 
 def draw_drp(img, drp) -> None:
-    if drp:
+    if drp is not None:
         pass
     return img
 
 class DiverVisualizationNode(object):
     def __init__(self) -> None:
-        rospy.loginfo("Setting up subscriptions and publisers.")
+        rospy.init_node('diver_visulizer')
+        rospy.loginfo("Setting up subscriptions and publishers.")
         # Get topic names from params and set up subscribers
-        image_topic = rospy.get_param('dcm/diver_topic', 'context/divers')
-        diver_topic = rospy.get_param('dcm/image_topic', '/camera/image_raw')
+        diver_topic = rospy.get_param('dcm/diver_topic', 'context/divers')
+        image_topic = rospy.get_param('dcm/image_topic', '/camera/image_raw')
 
         self.image_sub = rospy.Subscriber(image_topic, Image, self.image_cb, queue_size=5)
         self.diver_sub = rospy.Subscriber(diver_topic, DiverGroup, self.diver_cb, queue_size=5)
         
         vis_topic = rospy.get_param('dvm/vis_topic', 'context/diver_image')
-        self.vis_image_pub = rospy.Publisher(vis_topic, CompressedImage, queue_size=5)
+        self.vis_image_pub = rospy.Publisher(vis_topic, Image, queue_size=5)
 
         # Now it's time to set up the publishers
         diver_topic = rospy.get_param('dcm/diver_topic', 'context/divers')
@@ -69,7 +71,7 @@ class DiverVisualizationNode(object):
         self.bridge = CvBridge()
     
     def image_cb(self, msg: Image) -> None:
-        self.last_img = self.bridge.imgmsg_to_cv2(msg)
+        self.last_img = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
 
     def diver_cb(self, msg: DiverGroup) -> None:
         self.last_divers = msg
@@ -81,9 +83,15 @@ class DiverVisualizationNode(object):
         return img
 
     def update(self) -> None:
-        img = self.create_diver_vis_img()
-        msg = self.bridge.cv2_to_compressed_imgmsg(img)
-        self.vis_image_pub.publish(msg)
+        if self.last_divers is not None and self.last_img is not None:
+            img = self.create_diver_vis_img()
+            msg = self.bridge.cv2_to_imgmsg(img, encoding="bgr8")
+            self.vis_image_pub.publish(msg)
+        elif self.last_img is not None:
+            msg = self.bridge.cv2_to_imgmsg(self.last_img, encoding="bgr8")
+            self.vis_image_pub.publish(msg)
+        else:
+            return
 
 if __name__ == '__main__':
     dvn = DiverVisualizationNode()
