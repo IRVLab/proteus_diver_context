@@ -6,6 +6,7 @@ import numpy as np
 from cv_bridge import CvBridge
 
 from colorhash import ColorHash
+from collections import deque
 
 from geometry_msgs.msg import Point
 from sensor_msgs.msg import Image, CompressedImage
@@ -38,7 +39,10 @@ def draw_bbox(img, box, color) -> None:
 def draw_pose(img, pose, color) -> None:
     if pose is not None:
         for bp in pose.body_parts:
-            img = cv2.circle(img, (bp.abs_x, bp.abs_y), radius=2, color=color, thickness=-1)
+            if bp.confidence > 0.5:
+                img = cv2.circle(img, (bp.abs_x, bp.abs_y), radius=5, color=color, thickness=-1)
+                img = cv2.circle(img, (bp.abs_x, bp.abs_y), radius=6, color=(0,0,0), thickness=1)
+                img = cv2.putText(img, bp.id, (bp.abs_x+10, bp.abs_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,0), 2)
     return img
 
 def draw_drp(img, drp) -> None:
@@ -65,31 +69,54 @@ class DiverVisualizationNode(object):
         self.diver_pub = rospy.Publisher(diver_topic, DiverGroup, queue_size=5)
         self.update_freq = rospy.get_param('dcm/update_frequency', 10)
 
-        self.last_img = None
+        self.recent_imgs = deque(maxlen=5)
         self.last_divers = None
 
         self.bridge = CvBridge()
     
     def image_cb(self, msg: Image) -> None:
-        self.last_img = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        msg.header.stamp = rospy.Time.now()
+        self.recent_imgs.append(msg)
 
     def diver_cb(self, msg: DiverGroup) -> None:
         self.last_divers = msg
 
     def create_diver_vis_img(self):
-        img = self.last_img
+        img = self.get_best_img_match(self.last_divers.header.stamp)
         for diver in self.last_divers.divers:
             img = draw_diver(img, diver)
         return img
 
+    def get_best_img_match(self, timestamp):
+        return self.bridge.imgmsg_to_cv2(self.recent_imgs[0], desired_encoding="bgr8")
+        best_img = None
+        min_time = 100
+
+        for img in self.recent_imgs:
+            t_dist = (img.header.stamp - timestamp ).to_sec()
+
+            if t_dist > 0 and t_dist < min_time:
+                min_time = t_dist
+                best_img = img
+
+        # If we can't find a good match, just return the most recent image.
+        if best_img is None:
+            rospy.logdebug(f"No best match found.")
+            return self.bridge.imgmsg_to_cv2(self.recent_imgs.pop(), desired_encoding="bgr8")
+        else:
+            rospy.logdebug(f"Found best match, time_dist {min_time}")
+            self.recent_imgs.remove(best_img)
+            return self.bridge.imgmsg_to_cv2(best_img, desired_encoding="bgr8")
+
     def update(self) -> None:
-        if self.last_divers is not None and self.last_img is not None:
+        if self.last_divers is not None and len(self.recent_imgs) > 0:
             img = self.create_diver_vis_img()
             msg = self.bridge.cv2_to_imgmsg(img, encoding="bgr8")
             self.vis_image_pub.publish(msg)
-        elif self.last_img is not None:
-            msg = self.bridge.cv2_to_imgmsg(self.last_img, encoding="bgr8")
-            self.vis_image_pub.publish(msg)
+            self.last_divers = None
+        elif len(self.recent_imgs) > 0:
+            pass
+            # self.vis_image_pub.publish(self.recent_imgs[0])
         else:
             return
 

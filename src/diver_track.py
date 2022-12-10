@@ -1,6 +1,6 @@
 from typing import List, Tuple
 
-from rospy import Time
+import rospy
 from collections import deque
 from math import sqrt
 from statistics import mode
@@ -71,9 +71,9 @@ class DiverTrack(object):
 
         # Queues of recent BBox and Pose messages.
         self.recent_bboxes = deque(maxlen=queue_size)
-        self.last_bbox_time = Time.from_sec(0)
+        self.last_bbox_time = rospy.Time.from_sec(0)
         self.recent_poses = deque(maxlen=queue_size)
-        self.last_pose_time = Time.from_sec(0)
+        self.last_pose_time = rospy.Time.from_sec(0)
 
         # Time last seen and whether or not the diver is currently seen.
         self.last_seen = None
@@ -84,13 +84,13 @@ class DiverTrack(object):
         self.center_point = None
         self.pseudodistance = None
 
-        if bbox:
+        if bbox is not None:
             self.recent_bboxes.append(bbox)
-            self.last_bbox_time = Time.now()
+            self.last_bbox_time = rospy.Time.now()
     
-        if pose:
+        if pose is not None:
             self.recent_poses.append(bbox)
-            self.last_pose_time = Time.now()
+            self.last_pose_time = rospy.Time.now()
 
     # Accessor for latest bbox.
     def get_latest_bbox(self) -> BoundingBox:
@@ -132,7 +132,7 @@ class DiverTrack(object):
                 if k == 0:
                     continue
                 else:
-                    dists.append(calculate_iou(self.recent_poses[k-1], pose))
+                    dists.append(calculate_center_dist(self.recent_poses[k-1], pose))
             
             avg_dist = sum(dists)/ float(len(dists))
         else:
@@ -160,6 +160,13 @@ class DiverTrack(object):
     def calculate_pseudodistance(self) -> float:
         pass
 
+    def get_pose(self, pose_srv, img):
+        if ((rospy.Time.now() - self.last_bbox_time).to_sec() < DiverTrack._time_thresh):
+            rospy.logdebug(f"Requesting pose for diver {self.diver.readable_id}")
+            resp = pose_srv(img, self.recent_bboxes[0])
+            self.recent_poses.append(resp.pose)
+            self.last_pose_time = resp.pose.header.stamp
+
     # Attempt to associate a bounding box with this track.
     def associate_bbox(self, candidates: List[BoundingBox], method: str = "max_iou") -> Tuple[bool, List[BoundingBox]]:
         # If there are no previous bounding boxes, we need to consider the most recent pose.
@@ -178,7 +185,7 @@ class DiverTrack(object):
             if highest_count > DiverTrack._parts_threshold:
                 selected_bbox = candidates.pop(parts_within.index(highest_count))
                 self.recent_bboxes.append(selected_bbox)
-                self.last_bbox_time = Time.now()
+                self.last_bbox_time = rospy.Time.now()
                 return [True, candidates]
             else:
                 return [False, candidates]
@@ -202,7 +209,7 @@ class DiverTrack(object):
             if selected_idx is not None:
                 selected_bbox = candidates.pop(selected_idx)
                 self.recent_bboxes.append(selected_bbox)
-                self.last_bbox_time = Time.now()
+                self.last_bbox_time = rospy.Time.now()
                 ret = True
 
             else: # If the most common element in the list is None, we didn't find a good match.
@@ -229,7 +236,7 @@ class DiverTrack(object):
             if min_dist < DiverTrack._dist_thereshold:
                 selected_pose = candidates.pop(dists.index(min_dist))
                 self.recent_poses.append(selected_pose)
-                self.last_pose_time = Time.now()
+                self.last_pose_time = rospy.Time.now()
                 return [True, candidates]
             else:
                 return [False, candidates]
@@ -253,7 +260,7 @@ class DiverTrack(object):
             if selected_idx:
                 selected_pose = candidates.pop(selected_idx)
                 self.recent_poses.append(selected_pose)
-                self.last_bbox_time = Time.now()
+                self.last_bbox_time = rospy.Time.now()
                 ret = True
 
             else: # If the most common element in the list is None, we didn't find a good match.
@@ -265,5 +272,5 @@ class DiverTrack(object):
 
     # Update recency information
     def update_seen(self) -> None:
-        self.last_seen =  max(self.last_bbox_time, self.last_pose_time)
-        self.currently_seen = ((Time.now() - self.last_seen).to_sec() < DiverTrack._time_thresh)
+        self.last_seen = max(self.last_bbox_time, self.last_pose_time)
+        self.currently_seen = ((rospy.Time.now() - self.last_seen).to_sec() < DiverTrack._time_thresh)

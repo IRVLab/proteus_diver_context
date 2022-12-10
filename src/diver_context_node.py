@@ -7,6 +7,7 @@ from geometry_msgs.msg import Point
 from sensor_msgs.msg import Image
 from darknet_ros_msgs.msg import BoundingBoxes, BoundingBox
 from body_pose_msgs.msg import HumanPoseEstimateGroup, HumanPoseEstimate,BodyPartEstimate
+from deeplabcut_ros.srv import ProcessDiverPose
 from proteus_msgs.msg import DiverGroup, Diver, RelativePosition, Pseudodistance
 
 from diver_names import undersea_explorers
@@ -14,7 +15,7 @@ from diver_track import DiverTrack
 
 # The DiverContextNode is responsible for keeping track of divers that have been recently seen.
 class DiverContextNode(object):
-    _conf_thresh = 0.5
+    _conf_thresh = 0.75
 
     def __init__(self) -> None:
         rospy.init_node("proteus_diver_context_module", anonymous=False)
@@ -23,14 +24,19 @@ class DiverContextNode(object):
         # Get topic names from params and set up subscribers
         image_topic = rospy.get_param('dcm/img_topic', '/camera/image_raw')
         bbox_topic = rospy.get_param('dcm/bbox_topic', '/darknet_ros/bounding_boxes')
-        pose_topic = rospy.get_param('dcm/pose_topic', '/deeplabcut_ros/pose_estimates')
+        # pose_topic = rospy.get_param('dcm/pose_topic', '/deeplabcut_ros/pose_estimates')
 
         # Get base image dimmensions
-        img = rospy.wait_for_message(image_topic, Image)
-        self.img_dims = [float(img.width), float(img.height)]
+        self.img = rospy.wait_for_message(image_topic, Image)
+        self.img_sub = rospy.Subscriber(image_topic, Image, self.img_cb)
+        self.img_dims = [float(self.img.width), float(self.img.height)]
 
         self.bbox_sub = rospy.Subscriber(bbox_topic, BoundingBoxes, self.bbox_cb, queue_size=5)
-        self.pose_sub = rospy.Subscriber(pose_topic, HumanPoseEstimateGroup, self.pose_cb, queue_size=5)
+        # self.pose_sub = rospy.Subscriber(pose_topic, HumanPoseEstimateGroup, self.pose_cb, queue_size=5)
+        rospy.loginfo("Waiting for pose service...")
+        rospy.wait_for_service('/deeplabcut_ros/process_diver_pose')
+        self.pose_srv = rospy.ServiceProxy('/deeplabcut_ros/process_diver_pose', ProcessDiverPose)
+        rospy.loginfo("Pose service proxy established.")
         self.head_ang_sub = None # This is left unimplemented for now, but if you feel like adding head angle estimation, go for it.
 
         # Now it's time to set up the publishers
@@ -49,60 +55,47 @@ class DiverContextNode(object):
         self.diver_tracks = {}
         self.names_in_use = []
 
+    def img_cb(self, msg) -> None:
+        self.img = msg
+
     # Record the most recent bounding box.
     def bbox_cb(self, msg) -> None:
-        self.last_bbox = (msg)
+        self.last_bbox = msg
 
-    # Reocrd the recent pose message.
-    def pose_cb(self, msg) -> None:
-        self.last_pose = (msg)
+    # # Reocrd the recent pose message.
+    # def pose_cb(self, msg) -> None:
+    #     self.last_pose = msg
 
     # Add a diver to the current tracks.
-    def add_diver(self, bbox=None, pose=None) -> None:
+    def add_diver_track(self, bbox=None, pose=None) -> DiverTrack:
         if (bbox is not None) or (pose is not None):
             possible_names = [name for name in undersea_explorers if name not in self.names_in_use]
             name = random.choice(possible_names)
             self.names_in_use.append(name)
             self.diver_tracks[name] = DiverTrack(name, bbox=bbox, pose=pose, queue_size=self.queue_length, dims=self.img_dims)
+            return self.diver_tracks[name]
 
-    # Associate any current bounding boxes with existing tracks or add a new one.
-    def associate_bboxes(self) -> None:
-        candidates = self.last_bbox.bounding_boxes
+    # Update all diver tracks.
+    def update_diver_tracks(self) -> None:
+        if self.last_bbox is not None:
+                candidates = self.last_bbox.bounding_boxes
+        else:
+            candidates = []
 
-        for track in self.diver_tracks.values():
-            if len(candidates) == 0:
-                break
-            success, candidates = track.associate_bbox(candidates)
+        for key, track in self.diver_tracks.items():
+            # If there are candidate bboxes, attempt to associate them
+            if len(candidates) > 0:
+                success, candidates = track.associate_bbox(candidates)
+
+            track.get_pose(self.pose_srv, self.img) #Get pose for every track
+            track.update_seen()
+            track.update_relative_position()
 
         # At this point, any remaining candidates need a new diver, if they reach the confidence threshold
         for candidate in candidates:
             if candidate.probability > DiverContextNode._conf_thresh:
-                self.add_diver(bbox=candidate)
+                self.add_diver_track(bbox=candidate).update_seen()
 
-    # Associate any current poses with existing tracks, or add a new one.
-    def associate_poses(self) -> None:
-        candidates = self.last_pose.poses
-
-        for track in self.diver_tracks.values():
-            if len(candidates) == 0:
-                break
-            success, candidates = track.associate_pose(candidates)
-
-        # At this point, any remaining candidates need a new diver, if they reach the confidence threshold
-        for candidate in candidates:
-            if candidate.confidence > DiverContextNode._conf_thresh:
-                self.add_diver(pose=candidate)
-
-    # Update current track DRPs
-    def calculate_relative_position(self) -> None:
-        for track in self.diver_tracks.values():
-            track.update_relative_position()
-
-    # Update current track recency data
-    def update_seen(self) -> None:
-        for track in self.diver_tracks.values():
-            track.update_seen()
-    
     def cull_stale(self) -> None:
         keys_to_cull = []
         for key, track in self.diver_tracks.items():
@@ -113,19 +106,6 @@ class DiverContextNode(object):
         for key in keys_to_cull:
             self.diver_tracks.pop(key)
             self.names_in_use.pop(self.names_in_use.index(key))
-
-    # Update all diver tracks.
-    def update_diver_tracks(self) -> None:
-        if self.last_bbox is not None:
-            self.associate_bboxes()
-            self.last_bbox = None
-
-        if self.last_pose is not None:
-            self.associate_poses()
-            self.last_pose = None
-        self.update_seen()
-        self.cull_stale()
-        self.calculate_relative_position()
 
     # Publish diver group.
     def publish_divers(self) -> None:
@@ -167,5 +147,6 @@ if __name__ == '__main__':
     rate = rospy.Rate(dcn.update_freq)
     while not rospy.is_shutdown():
         dcn.update_diver_tracks()
+        dcn.cull_stale()
         dcn.publish_divers()
         rate.sleep()
