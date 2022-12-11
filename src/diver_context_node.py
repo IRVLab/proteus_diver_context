@@ -34,8 +34,9 @@ class DiverContextNode(object):
         self.bbox_sub = rospy.Subscriber(bbox_topic, BoundingBoxes, self.bbox_cb, queue_size=5)
         # self.pose_sub = rospy.Subscriber(pose_topic, HumanPoseEstimateGroup, self.pose_cb, queue_size=5)
         rospy.loginfo("Waiting for pose service...")
-        rospy.wait_for_service('/deeplabcut_ros/process_diver_pose')
-        self.pose_srv = rospy.ServiceProxy('/deeplabcut_ros/process_diver_pose', ProcessDiverPose)
+        self.pose_service_ref = rospy.get_param('dcm/pose_service', '/deeplabcut_ros/process_diver_pose')
+        rospy.wait_for_service(self.pose_service_ref)
+
         rospy.loginfo("Pose service proxy established.")
         self.head_ang_sub = None # This is left unimplemented for now, but if you feel like adding head angle estimation, go for it.
 
@@ -51,7 +52,7 @@ class DiverContextNode(object):
 
         # Now, time to create our internal diver collection.
         self.queue_length = rospy.get_param('dmc/obs_queue_len', 10)
-        self.stale_timeout = rospy.get_param('dmc/stale_timeout', 60)
+        self.stale_timeout = rospy.get_param('dmc/stale_timeout', 30)
         self.diver_tracks = {}
         self.names_in_use = []
 
@@ -72,11 +73,15 @@ class DiverContextNode(object):
             possible_names = [name for name in undersea_explorers if name not in self.names_in_use]
             name = random.choice(possible_names)
             self.names_in_use.append(name)
-            self.diver_tracks[name] = DiverTrack(name, bbox=bbox, pose=pose, queue_size=self.queue_length, dims=self.img_dims)
+            self.diver_tracks[name] = DiverTrack(name, bbox=bbox, pose_srv=self.pose_service_ref, queue_size=self.queue_length)
+
+            rospy.loginfo(f"New diver track {name} established.")
+            self.diver_tracks[name].start()
             return self.diver_tracks[name]
 
     # Update all diver tracks.
     def update_diver_tracks(self) -> None:
+        # rospy.logdebug("Updating diver tracks now")
         if self.last_bbox is not None:
                 candidates = self.last_bbox.bounding_boxes
         else:
@@ -85,30 +90,34 @@ class DiverContextNode(object):
         for key, track in self.diver_tracks.items():
             # If there are candidate bboxes, attempt to associate them
             if len(candidates) > 0:
+                # rospy.logdebug(f"Associating {len(candidates)} candidate bboxes with diver track {key}.")
                 success, candidates = track.associate_bbox(candidates)
 
-            track.get_pose(self.pose_srv, self.img) #Get pose for every track
-            track.update_seen()
-            track.update_relative_position()
-
+        # rospy.logdebug(f"There are {len(candidates)} bounding boxes available.")
         # At this point, any remaining candidates need a new diver, if they reach the confidence threshold
         for candidate in candidates:
             if candidate.probability > DiverContextNode._conf_thresh:
                 self.add_diver_track(bbox=candidate).update_seen()
+                
 
     def cull_stale(self) -> None:
+        # rospy.logdebug("Culling divers.")
         keys_to_cull = []
         for key, track in self.diver_tracks.items():
             if not track.currently_seen:
-                if (rospy.Time.now() - track.last_seen).to_sec() < self.stale_timeout:
+                if (rospy.Time.now() - track.last_seen).to_sec() >= self.stale_timeout:
                     keys_to_cull.append(key)
 
         for key in keys_to_cull:
-            self.diver_tracks.pop(key)
+            rospy.loginfo(f"Culling diver track {key} due to not seeing them for {self.stale_timeout} seconds.")
+            track = self.diver_tracks.pop(key)
+            track.close_track()
+            track.join()
             self.names_in_use.pop(self.names_in_use.index(key))
 
     # Publish diver group.
     def publish_divers(self) -> None:
+        # rospy.logdebug(f"Publishing diver group with {len(self.diver_tracks.items())} divers.")
         msg = DiverGroup()
         msg.header = Header()
 
@@ -125,6 +134,14 @@ class DiverContextNode(object):
             pose = track.get_latest_pose()
             if pose is not None:
                 d_msg.latest_pose = pose
+
+            fbox = track.get_filtered_bbox()
+            if fbox is not None:
+                d_msg.filtered_bbox = fbox
+
+            fpose = track.get_filtered_pose()
+            if fpose is not None:
+                d_msg.filtered_pose = pose
 
             # d_msg.location = RelativePosition()
             # cp, pd = track.get_relative_position()
