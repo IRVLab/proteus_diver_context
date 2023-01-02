@@ -20,7 +20,7 @@ def draw_latest_diver(img, diver) -> None:
         img = draw_name(img, diver.diver_id, [diver.latest_bbox.xmin, diver.latest_bbox.ymin], color)
         img = draw_bbox(img, diver.latest_bbox, color)
         img = draw_pose(img, diver.latest_pose, color)
-        img = draw_drp(img, diver.location)
+        img = draw_drp(img, diver.relative_position)
 
     return img
 
@@ -30,7 +30,7 @@ def draw_filtered_diver(img, diver) -> None:
         img = draw_name(img, diver.diver_id, [diver.filtered_bbox.xmin, diver.filtered_bbox.ymin], color)
         img = draw_bbox(img, diver.filtered_bbox, color)
         img = draw_pose(img, diver.filtered_pose, color)
-        img = draw_drp(img, diver.location)
+        img = draw_drp(img, diver.relative_position)
 
     return img
 
@@ -57,7 +57,22 @@ def draw_pose(img, pose, color) -> None:
 
 def draw_drp(img, drp) -> None:
     if drp is not None:
-        pass
+        cp = drp.center_point_abs
+        img = cv2.circle(img, (int(cp.x), int(cp.y)), radius=7, color=(0,200,100), thickness=-1)
+        pd = drp.distance.distance_ratio
+    
+        if pd > drp.distance.edge:
+            b = (255/3.00) * (pd/1.0) # The further we are, the more blue there is.
+            selected_color = (b, 255, 255)
+        elif pd < drp.distance.personal:
+            r = (255/1.0) * ((pd+1)/1.00) # The closer we are after the personal space level, the more red there is.
+            b = (255/3.00) * (pd/1.0) # The further we are, the more blue there is.
+            selected_color = (b, 0, r)
+        else:
+            b = (255/3.00) * (pd/1.0) # The further we are, the more blue there is.
+            selected_color = (b,50,0)
+        img = cv2.circle(img, (int(cp.x), int(cp.y)), radius=int(7 + (10*pd)), color=selected_color, thickness=4)
+
     return img
 
 class DiverVisualizationNode(object):
@@ -80,13 +95,13 @@ class DiverVisualizationNode(object):
         self.diver_pub = rospy.Publisher(diver_topic, DiverGroup, queue_size=5)
         self.update_freq = rospy.get_param('dcm/update_frequency', 10)
 
-        self.last_img = None
+        self.img_q = deque(maxlen=50)
         self.last_divers = None
 
         self.bridge = CvBridge()
     
     def image_cb(self, msg: Image) -> None:
-        self.last_img = msg
+        self.img_q.append(msg)
 
     def diver_cb(self, msg: DiverGroup) -> None:
         self.last_divers = msg
@@ -105,35 +120,31 @@ class DiverVisualizationNode(object):
             return img
 
 
-    def get_best_img_match(self, timestamp):
-        raise DeprecationWarning("NOT USED ANYMORE")
-        return None
+    def get_best_img_match(self, divers):
+        sum_seq = 0
+        n = 0
+        for d in divers.divers:
+            if d.currently_seen:
+                sum_seq += d.latest_img_header.seq
+                n += 1
 
-        # I'm leaving the below implementation in here, because I think it's worth looking at, 
-        # But it doesn't seem to be working right now, so I'm not gonna use it.
-        best_img = None
-        min_time = 100
-
-        for img in self.recent_imgs:
-            t_dist = (img.header.stamp - timestamp ).to_sec()
-
-            if t_dist > 0 and t_dist < min_time:
-                min_time = t_dist
-                best_img = img
-
-        # If we can't find a good match, just return the most recent image.
-        if best_img is None:
-            rospy.logdebug(f"No best match found.")
-            return self.bridge.imgmsg_to_cv2(self.recent_imgs.pop(), desired_encoding="bgr8")
-        else:
-            rospy.logdebug(f"Found best match, time_dist {min_time}")
-            self.recent_imgs.remove(best_img)
-            return self.bridge.imgmsg_to_cv2(best_img, desired_encoding="bgr8")
+        if n > 0:
+            avg_seq = int(sum_seq/n)
+            for img in self.img_q:
+                seq = img.header.seq
+                if seq == avg_seq:
+                    return img
+            
+        # If we haven't gotten to one yet, just return the most recent image.
+        return self.img_q[0]
+            
 
     def update(self) -> None:
-        if self.last_divers is not None and self.last_img is not None:
-            latest_img = self.create_diver_vis_img(self.last_img, mode='latest')
-            filtered_img = self.create_diver_vis_img(self.last_img, mode='filtered')
+
+        if self.last_divers is not None:
+            img  = self.get_best_img_match(self.last_divers)
+            latest_img = self.create_diver_vis_img(img, mode='latest')
+            filtered_img = self.create_diver_vis_img(self.img_q[0], mode='filtered')
 
             latest_msg = self.bridge.cv2_to_imgmsg(latest_img, encoding="bgr8")
             filtered_msg = self.bridge.cv2_to_imgmsg(filtered_img, encoding="bgr8")
@@ -141,9 +152,6 @@ class DiverVisualizationNode(object):
             self.vis_image_pub_latest.publish(latest_msg)
             self.vis_image_pub_filtered.publish(filtered_msg)
 
-        elif self.last_img is not None:
-            self.vis_image_pub_latest.publish(self.last_img)
-            self.vis_image_pub_filtered.publish(self.last_img)
         else:
             return
 

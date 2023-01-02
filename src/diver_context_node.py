@@ -15,7 +15,7 @@ from diver_track import DiverTrack
 
 # The DiverContextNode is responsible for keeping track of divers that have been recently seen.
 class DiverContextNode(object):
-    _conf_thresh = 0.75
+    _conf_thresh = 0.65
 
     def __init__(self) -> None:
         rospy.init_node("proteus_diver_context_module", anonymous=False)
@@ -68,12 +68,12 @@ class DiverContextNode(object):
     #     self.last_pose = msg
 
     # Add a diver to the current tracks.
-    def add_diver_track(self, bbox=None, pose=None) -> DiverTrack:
-        if (bbox is not None) or (pose is not None):
+    def add_diver_track(self, bbox=None, img_header=None) -> DiverTrack:
+        if (bbox is not None):
             possible_names = [name for name in undersea_explorers if name not in self.names_in_use]
             name = random.choice(possible_names)
             self.names_in_use.append(name)
-            self.diver_tracks[name] = DiverTrack(name, bbox=bbox, pose_srv=self.pose_service_ref, queue_size=self.queue_length)
+            self.diver_tracks[name] = DiverTrack(name, bbox=bbox, cur_img_header=img_header, pose_srv=self.pose_service_ref, img_dims = self.img_dims, queue_size=self.queue_length)
 
             rospy.loginfo(f"New diver track {name} established.")
             self.diver_tracks[name].start()
@@ -91,13 +91,13 @@ class DiverContextNode(object):
             # If there are candidate bboxes, attempt to associate them
             if len(candidates) > 0:
                 # rospy.logdebug(f"Associating {len(candidates)} candidate bboxes with diver track {key}.")
-                success, candidates = track.associate_bbox(candidates)
+                success, candidates = track.associate_bbox(candidates, self.last_bbox.image_header)
 
         # rospy.logdebug(f"There are {len(candidates)} bounding boxes available.")
         # At this point, any remaining candidates need a new diver, if they reach the confidence threshold
         for candidate in candidates:
             if candidate.probability > DiverContextNode._conf_thresh:
-                self.add_diver_track(bbox=candidate).update_seen()
+                self.add_diver_track(bbox=candidate, img_header=self.last_bbox.image_header).update_seen()
                 
 
     def cull_stale(self) -> None:
@@ -135,6 +135,10 @@ class DiverContextNode(object):
             if pose is not None:
                 d_msg.latest_pose = pose
 
+            header = track.get_latest_img_header()
+            if header is not None:
+                d_msg.latest_img_header = header
+
             fbox = track.get_filtered_bbox()
             if fbox is not None:
                 d_msg.filtered_bbox = fbox
@@ -143,14 +147,20 @@ class DiverContextNode(object):
             if fpose is not None:
                 d_msg.filtered_pose = pose
 
-            # d_msg.location = RelativePosition()
-            # cp, pd = track.get_relative_position()
-            # d_msg.location.center_point_rel = Point()
-            # d_msg.location.center_point_rel.x = cp[0]
-            # d_msg.location.center_point_rel.y = cp[1]
-            # d_msg.location.center_point_rel.z = 0.0
-            # d_msg.location.distance = Pseudodistance()
-            # d_msg.location.distance.distance_ratio = pd
+            cp, pd = track.get_relative_position()
+            if cp is not None:
+                d_msg.relative_position = RelativePosition()
+                d_msg.relative_position.center_point_abs = Point()
+                d_msg.relative_position.center_point_abs.x = int(cp[0])
+                d_msg.relative_position.center_point_abs.y = int(cp[1])
+                d_msg.relative_position.center_point_abs.z = 0.0
+                d_msg.relative_position.center_point_rel = Point()
+                d_msg.relative_position.center_point_rel.x = float(cp[0])/self.img_dims[0]
+                d_msg.relative_position.center_point_rel.y = float(cp[1])/self.img_dims[1]
+                d_msg.relative_position.center_point_rel.z = 0.0
+            if pd is not None:
+                d_msg.relative_position.distance = Pseudodistance()
+                d_msg.relative_position.distance.distance_ratio = pd
 
             msg.divers.append(d_msg)
 
