@@ -332,7 +332,14 @@ class DiverTrack(Thread):
     def calculate_track_confidence(self) -> float:
         c_bbox = self.calculate_bbox_confidence()
         c_pose = self.calculate_pose_confidence()
-        return (c_bbox * c_pose)
+        if c_bbox == 0.0 and c_pose == 0.0:
+            return 0.0
+        elif c_bbox == 0.0:
+            return c_pose
+        elif c_pose == 0.0:
+            return c_bbox
+        else:
+            return (c_bbox * c_pose)
 
     # Calculate DRP data
     def update_relative_position(self) -> None:
