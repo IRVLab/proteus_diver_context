@@ -172,11 +172,11 @@ class DiverTrack(Thread):
     _iou_threshold = 0.25
     _conf_threshold = 0.75
     _time_thresh = 1.5
-    _bbox_area_ratio = 0.72
-    _pose_ratio_config = {'bust':{'bps' : ['head','sternum'], 'target_ratio':0.65, 'axis': 'y', 'weight':0.1}, 
-                    'trunk':{'bps' : ['sternum','waist'], 'target_ratio':0.89, 'axis': 'y', 'weight':0.5}, 
-                    'wingpsan':{'bps' : ['l_shoulder','r_shoulder'], 'target_ratio':0.4, 'axis': 'x', 'weight':0.2}, 
-                    'hips':{'bps' : ['l_hip','r_hip'], 'target_ratio':0.2, 'axis': 'x', 'weight':0.2}}
+    _bbox_area_ratio = 0.9
+    _pose_ratio_config = {'bust':{'bps' : ['head','sternum'], 'target_ratio':0.75, 'axis': 'y', 'weight':0.1}, 
+                    'trunk':{'bps' : ['sternum','waist'], 'target_ratio':0.95, 'axis': 'y', 'weight':0.5}, 
+                    'wingpsan':{'bps' : ['l_shoulder','r_shoulder'], 'target_ratio':0.5, 'axis': 'x', 'weight':0.2}, 
+                    'hips':{'bps' : ['l_hip','r_hip'], 'target_ratio':0.3, 'axis': 'x', 'weight':0.2}}
 
     def __init__(self, name: str, bbox: BoundingBox, cur_img_header: Header, pose_srv: str, img_dims: List[float], queue_size: int = 10) -> None:
         super().__init__()
