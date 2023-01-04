@@ -1,4 +1,4 @@
-#! /usr/bin/python3
+#! /data/proteus_ws/proteus/bin/python
 import rospy
 import random
 

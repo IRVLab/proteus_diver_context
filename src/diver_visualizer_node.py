@@ -1,4 +1,4 @@
-#! /usr/bin/python3
+#! /data/proteus_ws/proteus/bin/python
 
 import rospy
 import cv2
@@ -81,7 +81,7 @@ class DiverVisualizationNode(object):
         rospy.loginfo("Setting up subscriptions and publishers.")
         # Get topic names from params and set up subscribers
         diver_topic = rospy.get_param('dcm/diver_topic', 'context/divers')
-        image_topic = rospy.get_param('dcm/image_topic', '/camera/image_raw')
+        image_topic = rospy.get_param('dcm/img_topic', '/camera/image_raw')
 
         self.image_sub = rospy.Subscriber(image_topic, Image, self.image_cb, queue_size=5)
         self.diver_sub = rospy.Subscriber(diver_topic, DiverGroup, self.diver_cb, queue_size=5)
@@ -141,7 +141,7 @@ class DiverVisualizationNode(object):
 
     def update(self) -> None:
 
-        if self.last_divers is not None:
+        if self.last_divers is not None and len(self.img_q) > 0:
             img  = self.get_best_img_match(self.last_divers)
             latest_img = self.create_diver_vis_img(img, mode='latest')
             filtered_img = self.create_diver_vis_img(self.img_q[0], mode='filtered')
@@ -162,4 +162,3 @@ if __name__ == '__main__':
     while not rospy.is_shutdown():
         dvn.update()
         rate.sleep()
-    

@@ -1,5 +1,6 @@
 <launch>
     <group ns="/loco/proteus/">
+        <param name="dcm/img_topic" value="/loco_cams/right/image_raw" type="str"/>
         <node pkg="proteus_diver_context" name="proteus_dcm" type="diver_context_node.py" respawn="true" output="screen"></node>
         <node pkg="proteus_diver_context" name="proteus_dvm" type="diver_visualizer_node.py" respawn="true" output="screen"></node>
     </group>
