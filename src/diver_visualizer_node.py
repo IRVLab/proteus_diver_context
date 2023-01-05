@@ -1,4 +1,6 @@
-#! /data/proteus_ws/proteus/bin/python
+#! /usr/bin/python3
+
+# /data/proteus_ws/proteus/bin/python
 
 import rospy
 import cv2
@@ -95,13 +97,15 @@ class DiverVisualizationNode(object):
         self.diver_pub = rospy.Publisher(diver_topic, DiverGroup, queue_size=5)
         self.update_freq = rospy.get_param('dcm/update_frequency', 10)
 
+        self.last_img = None
         self.img_q = deque(maxlen=50)
         self.last_divers = None
 
         self.bridge = CvBridge()
     
     def image_cb(self, msg: Image) -> None:
-        self.img_q.append(msg)
+        self.last_img = msg
+        # self.img_q.append(msg)
 
     def diver_cb(self, msg: DiverGroup) -> None:
         self.last_divers = msg
@@ -141,10 +145,11 @@ class DiverVisualizationNode(object):
 
     def update(self) -> None:
 
-        if self.last_divers is not None and len(self.img_q) > 0:
-            img  = self.get_best_img_match(self.last_divers)
+        if self.last_divers is not None and self.last_img is not None:
+            # img  = self.get_best_img_match(self.last_divers)
+            img = self.last_img
             latest_img = self.create_diver_vis_img(img, mode='latest')
-            filtered_img = self.create_diver_vis_img(self.img_q[0], mode='filtered')
+            filtered_img = self.create_diver_vis_img(img, mode='filtered')
 
             latest_msg = self.bridge.cv2_to_imgmsg(latest_img, encoding="bgr8")
             filtered_msg = self.bridge.cv2_to_imgmsg(filtered_img, encoding="bgr8")
