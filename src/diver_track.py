@@ -172,7 +172,7 @@ class DiverTrack(Thread):
     _iou_threshold = 0.25
     _conf_threshold = 0.75
     _time_thresh = 1.5
-    _bbox_area_ratio = 0.9
+    _bbox_area_ratio = 0.50
     _pose_ratio_config = {'bust':{'bps' : ['head','sternum'], 'target_ratio':0.75, 'axis': 'y', 'weight':0.1}, 
                     'trunk':{'bps' : ['sternum','waist'], 'target_ratio':0.95, 'axis': 'y', 'weight':0.5}, 
                     'wingpsan':{'bps' : ['l_shoulder','r_shoulder'], 'target_ratio':0.5, 'axis': 'x', 'weight':0.2}, 

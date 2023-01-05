@@ -74,6 +74,7 @@ def draw_drp(img, drp) -> None:
             b = (255/3.00) * (pd/1.0) # The further we are, the more blue there is.
             selected_color = (b,50,0)
         img = cv2.circle(img, (int(cp.x), int(cp.y)), radius=int(7 + (10*pd)), color=selected_color, thickness=4)
+        img = cv2.putText(img, "{:.2f}".format(pd), (int(cp.x)+15, int(cp.y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,200,100), 2)
 
     return img
 
